@@ -925,6 +925,25 @@ const FlaskConical = p => /*#__PURE__*/React.createElement(Icon, p, /*#__PURE__*
 const COLORS = ["#C68B4A", "#7A9A87", "#A65A73", "#4F8FA6", "#B99470", "#8C7BAF", "#C1573D", "#5E7A5B"];
 const DEFAULT_BOTTLE_SIZE = 700;
 const uid = () => Math.random().toString(36).slice(2, 10);
+// Firebase puede devolver un array como objeto cuando hubo borrados o índices huecos.
+// Además, normalizamos recetas/ingredientes para que una receta incompleta no rompa la app.
+const asArray = value => Array.isArray(value) ? value : (value && typeof value === "object" ? Object.values(value) : []);
+const normalizeCocktails = data => asArray(data).filter(Boolean).map(c => ({
+  ...c,
+  id: c.id || uid(),
+  name: c.name || "Sin nombre",
+  targetLiters: Number(c.targetLiters) || 10,
+  ingredients: asArray(c.ingredients).filter(Boolean).map(i => ({
+    ...i,
+    id: i.id || uid(),
+    name: i.name || "",
+    amount: Number(i.amount) || 0,
+    unit: i.unit || "ml",
+    trackBottles: !!i.trackBottles,
+    bottleSize: i.bottleSize == null ? null : Number(i.bottleSize) || null
+  }))
+}));
+
 const seedCocktails = () => [{
   id: uid(),
   name: "Cosmo del Sur",
@@ -1097,9 +1116,17 @@ function App() {
   useEffect(() => {
     const handleValue = snapshot => {
       const data = snapshot.val();
-      if (Array.isArray(data) && data.length) {
+      const normalized = normalizeCocktails(data);
+      if (normalized.length) {
         isRemoteUpdate.current = true;
-        setCocktails(data);
+        setCocktails(normalized);
+
+        // Keep Firebase in the canonical array shape. This also repairs old
+        // data that Firebase returned as an object or with missing fields.
+        const rawList = asArray(data);
+        const rawLooksDifferent = !Array.isArray(data) ||
+          JSON.stringify(rawList) !== JSON.stringify(normalized);
+        if (rawLooksDifferent) cocktailsRef.set(normalized).catch(() => {});
       } else {
         // First run: seed Firebase only when the shared database is empty.
         const seed = seedCocktails();
@@ -1315,7 +1342,8 @@ function SidebarItem({
   onDuplicate,
   onDelete
 }) {
-  const sum = cocktail.ingredients.reduce((s, i) => s + (Number(i.amount) || 0), 0);
+  const ingredients = Array.isArray(cocktail.ingredients) ? cocktail.ingredients : [];
+  const sum = ingredients.reduce((s, i) => s + (Number(i.amount) || 0), 0);
   return /*#__PURE__*/React.createElement("div", {
     className: `bl-side-item ${active ? "bl-side-item-active" : ""}`,
     onClick: onSelect
@@ -1378,7 +1406,7 @@ function CocktailPanel({
   onRemoveIngredient,
   onDuplicate
 }) {
-  const ingredients = cocktail.ingredients;
+  const ingredients = Array.isArray(cocktail.ingredients) ? cocktail.ingredients : [];
   const sumUnit = ingredients.reduce((s, i) => s + (Number(i.amount) || 0), 0);
   const scale = sumUnit > 0 ? 1000 / sumUnit : 0;
   const target = Number(cocktail.targetLiters) || 0;
