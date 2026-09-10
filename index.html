@@ -240,6 +240,8 @@
     transition: all 0.15s ease;
   }
   .bl-ghost-btn:hover { color: var(--brass-bright); border-color: var(--brass); }
+  button:disabled, input[readonly], select:disabled { opacity: .72; }
+  input[readonly] { cursor: default; }
 
   .bl-target-row { display: flex; align-items: flex-end; gap: 22px; margin-top: 18px; flex-wrap: wrap; }
 
@@ -412,6 +414,46 @@
     color: var(--muted-dim);
     border-top: 1px solid var(--border-soft);
     background: var(--bg-elevated);
+  }
+
+  .bl-admin-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    border: 1px solid var(--border); background: transparent; color: var(--muted);
+    border-radius: 7px; padding: 7px 10px; font-family: 'Inter', sans-serif;
+    font-size: 12px; cursor: pointer; white-space: nowrap;
+  }
+  .bl-admin-btn:hover { color: var(--brass-bright); border-color: var(--brass); }
+  .bl-admin-badge {
+    display: inline-flex; align-items: center; gap: 5px; color: var(--brass-bright);
+    font-size: 11px; font-family: 'Inter', sans-serif; white-space: nowrap;
+  }
+  .bl-readonly-note {
+    margin: 0 0 14px; padding: 9px 12px; border: 1px solid var(--border-soft);
+    border-radius: 8px; background: var(--bg-elevated); color: var(--muted);
+    font-size: 12px;
+  }
+  .bl-login-overlay {
+    position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center;
+    padding: 20px; background: rgba(0,0,0,.72); backdrop-filter: blur(5px);
+  }
+  .bl-login-card {
+    width: min(390px, 100%); background: var(--bg-elevated); border: 1px solid var(--border);
+    border-radius: 12px; padding: 24px; box-shadow: 0 18px 60px rgba(0,0,0,.45);
+  }
+  .bl-login-card h2 { margin: 0 0 7px; font-family: 'Fraunces', serif; font-size: 25px; }
+  .bl-login-card p { margin: 0 0 18px; color: var(--muted); font-size: 13px; line-height: 1.45; }
+  .bl-login-field { display: block; margin-bottom: 12px; }
+  .bl-login-field span { display: block; margin-bottom: 6px; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+  .bl-login-field input { width: 100%; box-sizing: border-box; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 7px; padding: 10px 11px; font: 14px 'Inter', sans-serif; outline: none; }
+  .bl-login-field input:focus { border-color: var(--brass); }
+  .bl-login-actions { display: flex; gap: 8px; margin-top: 16px; }
+  .bl-login-primary { flex: 1; border: 1px solid var(--brass); background: var(--brass); color: #17120d; border-radius: 7px; padding: 10px 12px; font-weight: 700; cursor: pointer; }
+  .bl-login-secondary { border: 1px solid var(--border); background: transparent; color: var(--muted); border-radius: 7px; padding: 10px 12px; cursor: pointer; }
+  .bl-login-error { margin-top: 12px; color: #e79a9a; font-size: 12px; line-height: 1.4; }
+  .bl-admin-only { display: inline-flex; }
+  @media (max-width: 860px) {
+    .bl-admin-btn { padding: 7px 8px; }
+    .bl-admin-badge { display: none; }
   }
 
   /* responsive */
@@ -804,6 +846,7 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
 
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-database-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
 <script>
   // ---------------------------------------------------------------------
   // PEGÁ ACÁ TU CONFIGURACIÓN DE FIREBASE
@@ -819,8 +862,13 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
     appId: "1:160626057282:web:ec1c794ad0fc9650fecddb"
   };
 
+  // IMPORTANTE: reemplazá este email por el email que usarás como administrador.
+  // No pongas acá la contraseña. La contraseña se maneja exclusivamente con Firebase Auth.
+  const ADMIN_EMAIL = "danielrodriguezfrank@gmail.com";
+
   firebase.initializeApp(FIREBASE_CONFIG);
   const db = firebase.database();
+  const auth = firebase.auth();
   const cocktailsRef = db.ref("batchlab/cocktails");
   const connectedRef = db.ref(".info/connected");
 </script>
@@ -1094,6 +1142,7 @@ const neededDisplay = (ing, total) => {
 // is a local UI preference, not something that should sync to everyone else
 // viewing the shared link at the same time.
 const SELECTED_ID_KEY = "batch-lab-selected-id";
+const PRODUCTION_TARGETS_KEY = "batch-lab-production-targets";
 
 // ---------------------------------------------------------------------------
 
@@ -1108,9 +1157,32 @@ function App() {
   });
   const [saveState, setSaveState] = useState("idle"); // idle | saving | saved
   const [online, setOnline] = useState(true);
+  const [user, setUser] = useState(null);
+  const [loginOpen, setLoginOpen] = useState(false);
+  const [productionTargets, setProductionTargets] = useState(() => {
+    try {
+      const raw = localStorage.getItem(PRODUCTION_TARGETS_KEY);
+      return raw ? JSON.parse(raw) : {};
+    } catch (e) { return {}; }
+  });
   const [mobileListOpen, setMobileListOpen] = useState(false);
   const saveTimer = useRef(null);
   const isRemoteUpdate = useRef(true);
+
+  const isAdmin = !!user && (user.email || "").toLowerCase() === ADMIN_EMAIL.toLowerCase();
+
+  // Authentication is only used for the administrator. Production users do not
+  // need an account and remain read-only.
+  useEffect(() => {
+    const unsubscribe = auth.onAuthStateChanged(nextUser => setUser(nextUser));
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(PRODUCTION_TARGETS_KEY, JSON.stringify(productionTargets));
+    } catch (e) {/* ignore */}
+  }, [productionTargets]);
 
   // ---- live subscription: everyone with the link shares this data ----
   useEffect(() => {
@@ -1126,13 +1198,13 @@ function App() {
         const rawList = asArray(data);
         const rawLooksDifferent = !Array.isArray(data) ||
           JSON.stringify(rawList) !== JSON.stringify(normalized);
-        if (rawLooksDifferent) cocktailsRef.set(normalized).catch(() => {});
+        if (rawLooksDifferent && isAdmin) cocktailsRef.set(normalized).catch(() => {});
       } else {
         // First run: seed Firebase only when the shared database is empty.
         const seed = seedCocktails();
         isRemoteUpdate.current = true;
         setCocktails(seed);
-        cocktailsRef.set(seed).catch(() => {});
+        if (isAdmin) cocktailsRef.set(seed).catch(() => {});
       }
     };
     cocktailsRef.on("value", handleValue);
@@ -1142,7 +1214,7 @@ function App() {
       cocktailsRef.off("value", handleValue);
       connectedRef.off("value", handleConnected);
     };
-  }, []);
+  }, [isAdmin]);
 
   // ---- pick a sensible selected cocktail once data arrives / changes ----
   useEffect(() => {
@@ -1159,7 +1231,7 @@ function App() {
 
   // ---- push local edits to everyone (debounced, skips remote echoes) ----
   useEffect(() => {
-    if (cocktails === null) return;
+    if (cocktails === null || !isAdmin) return;
     if (isRemoteUpdate.current) {
       isRemoteUpdate.current = false;
       return;
@@ -1173,15 +1245,22 @@ function App() {
       }).catch(() => setSaveState("idle"));
     }, 450);
     return () => clearTimeout(saveTimer.current);
-  }, [cocktails]);
+  }, [cocktails, isAdmin]);
   const selected = cocktails ? cocktails.find(c => c.id === selectedId) || null : null;
+  const selectedTarget = selected ? (productionTargets[selected.id] ?? selected.targetLiters ?? 10) : 10;
+  const setProductionTarget = useCallback((value) => {
+    if (!selected) return;
+    setProductionTargets(prev => ({ ...prev, [selected.id]: value }));
+  }, [selected]);
   const updateCocktail = useCallback((id, patch) => {
+    if (!isAdmin) return;
     setCocktails(prev => prev.map(c => c.id === id ? {
       ...c,
       ...patch
     } : c));
-  }, []);
+  }, [isAdmin]);
   const updateIngredient = useCallback((cocktailId, ingId, patch) => {
+    if (!isAdmin) return;
     setCocktails(prev => prev.map(c => c.id !== cocktailId ? c : {
       ...c,
       ingredients: c.ingredients.map(i => i.id === ingId ? {
@@ -1189,8 +1268,9 @@ function App() {
         ...patch
       } : i)
     }));
-  }, []);
+  }, [isAdmin]);
   const addIngredient = cocktailId => {
+    if (!isAdmin) return;
     setCocktails(prev => prev.map(c => c.id !== cocktailId ? c : {
       ...c,
       ingredients: [...c.ingredients, {
@@ -1204,12 +1284,14 @@ function App() {
     }));
   };
   const removeIngredient = (cocktailId, ingId) => {
+    if (!isAdmin) return;
     setCocktails(prev => prev.map(c => c.id !== cocktailId ? c : {
       ...c,
       ingredients: c.ingredients.filter(i => i.id !== ingId)
     }));
   };
   const addCocktail = () => {
+    if (!isAdmin) return;
     const fresh = {
       id: uid(),
       name: "Nuevo cóctel",
@@ -1221,6 +1303,7 @@ function App() {
     setMobileListOpen(false);
   };
   const duplicateCocktail = id => {
+    if (!isAdmin) return;
     const original = cocktails.find(c => c.id === id);
     if (!original) return;
     const clone = {
@@ -1242,6 +1325,7 @@ function App() {
     setMobileListOpen(false);
   };
   const removeCocktail = id => {
+    if (!isAdmin) return;
     const c = cocktails.find(x => x.id === id);
     if (!window.confirm(`¿Borrar "${c.name}"? Esta acción no se puede deshacer.`)) return;
     setCocktails(prev => {
@@ -1250,6 +1334,17 @@ function App() {
       return next;
     });
   };
+  const handleLogin = async (email, password) => {
+    if (email.trim().toLowerCase() !== ADMIN_EMAIL.toLowerCase()) {
+      throw new Error("Este usuario no está autorizado como administrador.");
+    }
+    await auth.signInWithEmailAndPassword(email.trim(), password);
+    setLoginOpen(false);
+  };
+  const handleLogout = async () => {
+    await auth.signOut();
+  };
+
   if (cocktails === null) {
     return /*#__PURE__*/React.createElement("div", {
       className: "bl-root bl-loading"
@@ -1277,14 +1372,22 @@ function App() {
     className: "bl-live-label"
   }, online ? "En vivo" : "Sin conexión")), /*#__PURE__*/React.createElement(SaveIndicator, {
     state: saveState
-  }), /*#__PURE__*/React.createElement("button", {
+  }), isAdmin ? /*#__PURE__*/React.createElement("button", {
+    className: "bl-admin-btn",
+    onClick: handleLogout,
+    title: "Cerrar sesión de administrador"
+  }, "🔓 Admin", /*#__PURE__*/React.createElement("span", { className: "bl-admin-badge" }, "Salir")) : /*#__PURE__*/React.createElement("button", {
+    className: "bl-admin-btn",
+    onClick: () => setLoginOpen(true),
+    title: "Ingresar como administrador"
+  }, "🔒 Admin"), /*#__PURE__*/React.createElement("button", {
     className: "bl-mobile-toggle",
     onClick: () => setMobileListOpen(v => !v)
   }, mobileListOpen ? "Cerrar" : "Mis cócteles"))), /*#__PURE__*/React.createElement("div", {
     className: "bl-body"
   }, /*#__PURE__*/React.createElement("aside", {
     className: `bl-sidebar bl-no-print ${mobileListOpen ? "bl-sidebar-open" : ""}`
-  }, /*#__PURE__*/React.createElement("button", {
+  }, isAdmin && /*#__PURE__*/React.createElement("button", {
     className: "bl-new-btn",
     onClick: addCocktail
   }, /*#__PURE__*/React.createElement(Plus, {
@@ -1301,22 +1404,63 @@ function App() {
       setSelectedId(c.id);
       setMobileListOpen(false);
     },
-    onDuplicate: () => duplicateCocktail(c.id),
-    onDelete: () => removeCocktail(c.id)
+    onDuplicate: isAdmin ? () => duplicateCocktail(c.id) : null,
+    onDelete: isAdmin ? () => removeCocktail(c.id) : null,
+    readOnly: !isAdmin
   })))), /*#__PURE__*/React.createElement("main", {
     className: "bl-main"
   }, !selected ? /*#__PURE__*/React.createElement(EmptyState, {
-    onAdd: addCocktail
+    onAdd: addCocktail,
+    readOnly: !isAdmin
   }) : /*#__PURE__*/React.createElement(CocktailPanel, {
     cocktail: selected,
     onUpdateCocktail: patch => updateCocktail(selected.id, patch),
     onUpdateIngredient: (ingId, patch) => updateIngredient(selected.id, ingId, patch),
     onAddIngredient: () => addIngredient(selected.id),
     onRemoveIngredient: ingId => removeIngredient(selected.id, ingId),
-    onDuplicate: () => duplicateCocktail(selected.id)
+    onDuplicate: isAdmin ? () => duplicateCocktail(selected.id) : null,
+    targetLiters: selectedTarget,
+    onTargetChange: setProductionTarget,
+    readOnly: !isAdmin
   }))), /*#__PURE__*/React.createElement("footer", {
     className: "bl-footer-note bl-no-print"
-  }, "Los datos se guardan en este navegador."));
+  }, isAdmin ? "Modo administrador · cambios de recetas sincronizados con Firebase." : "Modo producción · receta protegida · los litros de producción son solo para este dispositivo."), loginOpen && /*#__PURE__*/React.createElement(LoginDialog, {
+    onClose: () => setLoginOpen(false),
+    onLogin: handleLogin
+  }));
+}
+function LoginDialog({ onClose, onLogin }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const submit = async e => {
+    e.preventDefault();
+    setError("");
+    setBusy(true);
+    try {
+      await onLogin(email, password);
+    } catch (err) {
+      const code = err && err.code ? err.code : "";
+      setError(code === "auth/invalid-credential" || code === "auth/wrong-password" || code === "auth/user-not-found"
+        ? "Email o contraseña incorrectos."
+        : (err.message || "No se pudo iniciar sesión."));
+    } finally { setBusy(false); }
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    className: "bl-login-overlay",
+    onMouseDown: e => { if (e.target === e.currentTarget) onClose(); }
+  }, /*#__PURE__*/React.createElement("form", { className: "bl-login-card", onSubmit: submit },
+    /*#__PURE__*/React.createElement("h2", null, "Modo administrador"),
+    /*#__PURE__*/React.createElement("p", null, "Ingresá con tu cuenta de Firebase para editar las recetas maestras. El resto de los usuarios puede calcular, pero no modificar la receta."),
+    /*#__PURE__*/React.createElement("label", { className: "bl-login-field" }, /*#__PURE__*/React.createElement("span", null, "Email"), /*#__PURE__*/React.createElement("input", { type: "email", value: email, onChange: e => setEmail(e.target.value), autoComplete: "username", required: true, autoFocus: true })),
+    /*#__PURE__*/React.createElement("label", { className: "bl-login-field" }, /*#__PURE__*/React.createElement("span", null, "Contraseña"), /*#__PURE__*/React.createElement("input", { type: "password", value: password, onChange: e => setPassword(e.target.value), autoComplete: "current-password", required: true })),
+    error && /*#__PURE__*/React.createElement("div", { className: "bl-login-error" }, error),
+    /*#__PURE__*/React.createElement("div", { className: "bl-login-actions" },
+      /*#__PURE__*/React.createElement("button", { type: "button", className: "bl-login-secondary", onClick: onClose }, "Cancelar"),
+      /*#__PURE__*/React.createElement("button", { type: "submit", className: "bl-login-primary", disabled: busy }, busy ? "Ingresando…" : "Ingresar")
+    )
+  ));
 }
 function SaveIndicator({
   state
@@ -1340,7 +1484,8 @@ function SidebarItem({
   active,
   onSelect,
   onDuplicate,
-  onDelete
+  onDelete,
+  readOnly
 }) {
   const ingredients = Array.isArray(cocktail.ingredients) ? cocktail.ingredients : [];
   const sum = ingredients.reduce((s, i) => s + (Number(i.amount) || 0), 0);
@@ -1353,7 +1498,7 @@ function SidebarItem({
     className: "bl-side-item-name"
   }, cocktail.name || "Sin nombre"), /*#__PURE__*/React.createElement("div", {
     className: "bl-side-item-actions"
-  }, /*#__PURE__*/React.createElement("button", {
+  }, !readOnly && /*#__PURE__*/React.createElement("button", {
     className: "bl-icon-btn bl-icon-btn-ghost",
     onClick: e => {
       e.stopPropagation();
@@ -1362,7 +1507,7 @@ function SidebarItem({
     title: "Duplicar"
   }, /*#__PURE__*/React.createElement(Copy, {
     size: 13
-  })), /*#__PURE__*/React.createElement("button", {
+  })), !readOnly && /*#__PURE__*/React.createElement("button", {
     className: "bl-icon-btn bl-icon-btn-ghost",
     onClick: e => {
       e.stopPropagation();
@@ -1373,7 +1518,7 @@ function SidebarItem({
     size: 13
   })))), /*#__PURE__*/React.createElement("div", {
     className: "bl-side-item-meta"
-  }, cocktail.ingredients.length, " insumo", cocktail.ingredients.length !== 1 ? "s" : "", " \xB7 ", fmt(cocktail.targetLiters), " L"), sum > 0 && /*#__PURE__*/React.createElement("div", {
+  }, ingredients.length, " insumo", ingredients.length !== 1 ? "s" : "", " \xB7 ", fmt(cocktail.targetLiters), " L"), sum > 0 && /*#__PURE__*/React.createElement("div", {
     className: "bl-mini-bar"
   }, cocktail.ingredients.map((i, idx) => /*#__PURE__*/React.createElement("span", {
     key: i.id,
@@ -1384,13 +1529,14 @@ function SidebarItem({
   }))));
 }
 function EmptyState({
-  onAdd
+  onAdd,
+  readOnly
 }) {
   return /*#__PURE__*/React.createElement("div", {
     className: "bl-empty"
   }, /*#__PURE__*/React.createElement(Martini, {
     size: 30
-  }), /*#__PURE__*/React.createElement("h2", null, "Arm\xE1 tu primera receta"), /*#__PURE__*/React.createElement("p", null, "Carg\xE1 los insumos de un c\xF3ctel con su cantidad por trago y la app va a calcular el lote completo cuando le digas cu\xE1ntos litros necesit\xE1s."), /*#__PURE__*/React.createElement("button", {
+  }), /*#__PURE__*/React.createElement("h2", null, readOnly ? "No hay recetas cargadas" : "Arm\xE1 tu primera receta"), /*#__PURE__*/React.createElement("p", null, readOnly ? "El administrador todav\xEDa no carg\xF3 ninguna receta en Firebase." : "Carg\xE1 los insumos de un c\xF3ctel con su cantidad por trago y la app va a calcular el lote completo cuando le digas cu\xE1ntos litros necesit\xE1s."), !readOnly && /*#__PURE__*/React.createElement("button", {
     className: "bl-new-btn",
     onClick: onAdd
   }, /*#__PURE__*/React.createElement(Plus, {
@@ -1404,12 +1550,15 @@ function CocktailPanel({
   onUpdateIngredient,
   onAddIngredient,
   onRemoveIngredient,
-  onDuplicate
+  onDuplicate,
+  targetLiters,
+  onTargetChange,
+  readOnly
 }) {
   const ingredients = Array.isArray(cocktail.ingredients) ? cocktail.ingredients : [];
   const sumUnit = ingredients.reduce((s, i) => s + (Number(i.amount) || 0), 0);
   const scale = sumUnit > 0 ? 1000 / sumUnit : 0;
-  const target = Number(cocktail.targetLiters) || 0;
+  const target = Number(targetLiters) || 0;
   const handlePrint = () => window.print();
   const toggleBottles = (ing, trackBottles) => {
     if (trackBottles && !ing.bottleSize) onUpdateIngredient(ing.id, {
@@ -1427,7 +1576,7 @@ function CocktailPanel({
     className: "bl-print-eyebrow"
   }, "Especificaci\xF3n de producci\xF3n"), /*#__PURE__*/React.createElement("h1", null, cocktail.name), /*#__PURE__*/React.createElement("p", {
     className: "bl-print-meta"
-  }, "Lote: ", fmt(target), " L \xB7 ", new Date().toLocaleDateString("es-AR"))), /*#__PURE__*/React.createElement("div", {
+  }, "Lote: ", fmt(targetLiters), " L \xB7 ", new Date().toLocaleDateString("es-AR"))), /*#__PURE__*/React.createElement("div", {
     className: "bl-panel-head"
   }, /*#__PURE__*/React.createElement("div", {
     className: "bl-panel-head-row"
@@ -1437,10 +1586,11 @@ function CocktailPanel({
     onChange: e => onUpdateCocktail({
       name: e.target.value
     }),
+    readOnly: readOnly,
     placeholder: "Nombre del c\xF3ctel"
   }), /*#__PURE__*/React.createElement("div", {
     className: "bl-panel-actions bl-no-print"
-  }, /*#__PURE__*/React.createElement("button", {
+  }, !readOnly && /*#__PURE__*/React.createElement("button", {
     className: "bl-ghost-btn",
     onClick: onDuplicate
   }, /*#__PURE__*/React.createElement(Copy, {
@@ -1463,21 +1613,19 @@ function CocktailPanel({
     min: "0",
     step: "0.5",
     className: "bl-liter-input",
-    value: cocktail.targetLiters,
-    onChange: e => onUpdateCocktail({
-      targetLiters: e.target.value
-    })
+    value: targetLiters,
+    onChange: e => onTargetChange(e.target.value)
   }), /*#__PURE__*/React.createElement("span", {
     className: "bl-liter-unit"
   }, "L"))), /*#__PURE__*/React.createElement("div", {
     className: "bl-presets bl-no-print"
   }, LITER_PRESETS.map(n => /*#__PURE__*/React.createElement("button", {
     key: n,
-    className: `bl-preset ${Number(cocktail.targetLiters) === n ? "bl-preset-active" : ""}`,
-    onClick: () => onUpdateCocktail({
-      targetLiters: n
-    })
-  }, n, "L"))))), ingredients.length > 0 && /*#__PURE__*/React.createElement("div", {
+    className: `bl-preset ${Number(targetLiters) === n ? "bl-preset-active" : ""}`,
+    onClick: () => onTargetChange(n)
+  }, n, "L"))))), readOnly && /*#__PURE__*/React.createElement("div", {
+    className: "bl-readonly-note"
+  }, "🔒 Receta protegida · podés cambiar los litros de producción y recalcular, pero no modificar las proporciones."), ingredients.length > 0 && /*#__PURE__*/React.createElement("div", {
     className: "bl-ratio-section"
   }, /*#__PURE__*/React.createElement("div", {
     className: "bl-ratio-bar"
@@ -1520,6 +1668,7 @@ function CocktailPanel({
       className: "bl-cell-input bl-cell-input-name",
       value: ing.name,
       placeholder: "Nombre del insumo",
+      readOnly: readOnly,
       onChange: e => onUpdateIngredient(ing.id, {
         name: e.target.value
       })
@@ -1531,12 +1680,14 @@ function CocktailPanel({
       min: "0",
       className: "bl-cell-input bl-cell-input-num",
       value: ing.amount,
+      readOnly: readOnly,
       onChange: e => onUpdateIngredient(ing.id, {
         amount: e.target.value
       })
     }), /*#__PURE__*/React.createElement("select", {
       className: "bl-unit-select",
       value: ing.unit,
+      disabled: readOnly,
       onChange: e => onUpdateIngredient(ing.id, {
         unit: e.target.value
       })
@@ -1550,9 +1701,11 @@ function CocktailPanel({
       className: "bl-mode-toggle"
     }, /*#__PURE__*/React.createElement("button", {
       className: `bl-mode-btn ${ing.trackBottles ? "bl-mode-active" : ""}`,
+      disabled: readOnly,
       onClick: () => toggleBottles(ing, true)
     }, "Botella"), /*#__PURE__*/React.createElement("button", {
       className: `bl-mode-btn ${!ing.trackBottles ? "bl-mode-active" : ""}`,
+      disabled: readOnly,
       onClick: () => toggleBottles(ing, false)
     }, "Granel")), ing.trackBottles && /*#__PURE__*/React.createElement("div", {
       className: "bl-bottle-size-wrap"
@@ -1561,6 +1714,7 @@ function CocktailPanel({
       min: "1",
       className: "bl-cell-input bl-cell-input-num bl-cell-input-bottle",
       value: ing.bottleSize ?? "",
+      readOnly: readOnly,
       onChange: e => onUpdateIngredient(ing.id, {
         bottleSize: e.target.value === "" ? null : e.target.value
       })
@@ -1574,7 +1728,7 @@ function CocktailPanel({
       className: "bl-td-computed bl-td-needed"
     }, neededDisplay(ing, total)), /*#__PURE__*/React.createElement("td", {
       className: "bl-no-print"
-    }, /*#__PURE__*/React.createElement("button", {
+    }, !readOnly && /*#__PURE__*/React.createElement("button", {
       className: "bl-icon-btn bl-icon-btn-ghost",
       onClick: () => onRemoveIngredient(ing.id),
       "aria-label": "Quitar insumo"
@@ -1591,7 +1745,7 @@ function CocktailPanel({
     className: "bl-td-computed bl-tfoot-strong"
   }, fmt(sumUnit * scale * target), " ml"), /*#__PURE__*/React.createElement("td", null), /*#__PURE__*/React.createElement("td", {
     className: "bl-no-print"
-  }))))), /*#__PURE__*/React.createElement("button", {
+  }))))), !readOnly && /*#__PURE__*/React.createElement("button", {
     className: "bl-add-ing-btn bl-no-print",
     onClick: onAddIngredient
   }, /*#__PURE__*/React.createElement(Plus, {
